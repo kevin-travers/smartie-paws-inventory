@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SmartiePaws.Inventory.Core/SmartiePaws.Inventory.Core.csproj" />
+    <Project Path="src/SmartiePaws.Inventory.Data/SmartiePaws.Inventory.Data.csproj" />
+    <Project Path="src/SmartiePaws.Inventory.Service/SmartiePaws.Inventory.Service.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SmartiePaws.Inventory.Core.Tests/SmartiePaws.Inventory.Core.Tests.csproj" />
+    <Project Path="tests/SmartiePaws.Inventory.Data.Tests/SmartiePaws.Inventory.Data.Tests.csproj" />
+    <Project Path="tests/SmartiePaws.Inventory.Service.Tests/SmartiePaws.Inventory.Service.Tests.csproj" />
+  </Folder>
+</Solution>
