@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 
-namespace SmartiePaws.Inventory.Core.Entities;
+namespace SmartiePaws.Inventory.Core.Entities.Identity;
 
 /// <summary>
 /// Extends ASP.NET Core Identity's <see cref="IdentityUser{TKey}"/> with the fields this

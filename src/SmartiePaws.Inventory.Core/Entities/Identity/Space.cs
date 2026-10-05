@@ -1,4 +1,4 @@
-namespace SmartiePaws.Inventory.Core.Entities;
+namespace SmartiePaws.Inventory.Core.Entities.Identity;
 
 /// <summary>
 /// A team/workspace scope within an <see cref="Organization"/>. Product catalog, sales, and

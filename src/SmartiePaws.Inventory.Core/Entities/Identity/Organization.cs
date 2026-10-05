@@ -1,4 +1,4 @@
-namespace SmartiePaws.Inventory.Core.Entities;
+namespace SmartiePaws.Inventory.Core.Entities.Identity;
 
 /// <summary>
 /// The top-level tenant. Owns one or more <see cref="Space"/>s and has members via

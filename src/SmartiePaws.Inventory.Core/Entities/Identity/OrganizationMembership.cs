@@ -1,6 +1,6 @@
 using SmartiePaws.Inventory.Core.Enums;
 
-namespace SmartiePaws.Inventory.Core.Entities;
+namespace SmartiePaws.Inventory.Core.Entities.Identity;
 
 /// <summary>
 /// Grants a <see cref="User"/> a role within an <see cref="Organization"/>. See
