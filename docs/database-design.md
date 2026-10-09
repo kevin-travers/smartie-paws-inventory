@@ -35,16 +35,23 @@ How a customer paid for a Sale. Nullable on `Sale.PaymentMethod` since payment m
 
 ### SaleStatus
 
-Whether a Sale counts as real, finalized revenue. See the `Sale.Status` column above for the full reasoning.
+The lifecycle state of a Sale, and the moment inventory actually gets consumed: a Sale starts
+`InProgress` while line items are still being added/removed, with no inventory touched yet.
+It becomes `Completed` only once paid -- that transition is what runs FIFO consumption (creating
+`SaleLineItemLotConsumption` rows and decrementing `PurchaseOrderLineItem.QuantityRemaining`). `Voided` can be
+reached from either state: voiding an `InProgress` sale is trivial (nothing was ever consumed),
+while voiding a `Completed` sale reverses that consumption, restoring the inventory it used.
 
 ```
-┌───────────┬──────────────────────────────────┐
-│   Value   │              Notes               │
-├───────────┼──────────────────────────────────┤
-│ Completed │ normal finalized sale            │
-├───────────┼──────────────────────────────────┤
-│ Voided    │ sale was a mistake, fully undone │
-└───────────┴──────────────────────────────────┘
+┌────────────┬─────────────────────────────────────────────────────────────────────────────┐
+│   Value    │                                    Notes                                    │
+├────────────┼─────────────────────────────────────────────────────────────────────────────┤
+│ InProgress │ sale is being built; no inventory consumed yet                              │
+├────────────┼─────────────────────────────────────────────────────────────────────────────┤
+│ Completed  │ finalized and paid; inventory consumed via FIFO                             │
+├────────────┼─────────────────────────────────────────────────────────────────────────────┤
+│ Voided     │ called off -- trivial from InProgress, restocks inventory if from Completed │
+└────────────┴─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### DiscountType
@@ -65,7 +72,7 @@ Shared by both `Sale`'s and `SaleLineItem`'s discount fields -- says how to inte
 
 ### Vendor
 
-Represents a supplier you buy inventory from. Every `Purchase` records which Vendor it came from, so purchase history and (eventually) vendor spend can be tracked. Vendors are global in this MVP -- there's no organization/space scoping anymore, since the system now has a single shared inventory with no multi-tenancy.
+Represents a supplier you buy inventory from. Every `PurchaseOrder` records which Vendor it came from, so purchase history and (eventually) vendor spend can be tracked. Vendors are global in this MVP -- there's no organization/space scoping anymore, since the system now has a single shared inventory with no multi-tenancy.
 
 ```
 ┌─────────────┬─────────────┬───────────────────────────────────┐
@@ -98,7 +105,7 @@ Represents a supplier you buy inventory from. Every `Purchase` records which Ven
 - **ContactName** -- A specific person to contact at the vendor, if known. Optional since many vendors are just a business name plus general contact info.
 - **Email / Phone / Address** -- Contact details, all optional since you may not have all of them for every vendor.
 - **Notes** -- Free-form field for anything else worth remembering -- account numbers, special terms, etc.
-- **CreatedAt / UpdatedAt / DeletedAt** -- The standard database-owned timestamp trio used on every table in this schema. `CreatedAt` is set once by a column default when the row is inserted. `UpdatedAt` is set the same way on insert, then advanced by a database trigger on every subsequent update. `DeletedAt` starts null and is set explicitly by the app when a vendor is deactivated -- soft-deleted rather than actually removed, so old `Purchase` rows that reference it stay valid.
+- **CreatedAt / UpdatedAt / DeletedAt** -- The standard database-owned timestamp trio used on every table in this schema. `CreatedAt` is set once by a column default when the row is inserted. `UpdatedAt` is set the same way on insert, then advanced by a database trigger on every subsequent update. `DeletedAt` starts null and is set explicitly by the app when a vendor is deactivated -- soft-deleted rather than actually removed, so old `PurchaseOrder` rows that reference it stay valid.
 
 ### Product
 
@@ -165,50 +172,94 @@ One specific, actually-sellable version of a Product -- this is the row that car
 - **Sku** -- The variant's unique stock-keeping unit code -- what you'd print on a label or look up by. Unique across the catalog.
 - **Barcode** -- A scannable UPC/EAN code, if you want barcode scanning at checkout later. Kept separate from SKU since not every SKU necessarily has a manufacturer barcode.
 - **Price** -- The current price charged for this variant. Used as the default when ringing up a sale; a `SaleLineItem` can still charge a different price if discounted.
-- **QuantityOnHand** -- A cached running total of how many units are currently in stock. The real source of truth is the sum of `QuantityRemaining` across this variant's `Purchase` rows -- this column exists purely so the current stock level doesn't have to be re-summed every time it's displayed.
+- **QuantityOnHand** -- A cached running total of how many units are currently in stock. The real source of truth is the sum of `QuantityRemaining` across this variant's `PurchaseOrderLineItem` rows -- this column exists purely so the current stock level doesn't have to be re-summed every time it's displayed.
 - **ReorderPoint** -- An optional threshold. Once `QuantityOnHand` drops to or below this number, a dashboard can flag it as running low.
 - **CreatedAt / UpdatedAt / DeletedAt** -- Same pattern as above.
 
-### Purchase
+### PurchaseOrder
 
-Records a single restock event: buying some quantity of one ProductVariant from one Vendor, at whatever it actually cost. This table also doubles as the FIFO "lot" for that batch of stock -- `QuantityRemaining` starts equal to `QuantityPurchased` and counts down as that specific batch gets sold, so that profit/cost-of-goods numbers reflect what was actually paid for the units sold, not just today's price.
+One restock order placed with a Vendor -- the header, mirroring `Sale`. A single order commonly
+covers *multiple* different products at once with one shared shipping charge, which is exactly
+what this header exists to represent: `VendorId` and `ShippingCost` live here, once per order, not
+duplicated on every line item.
 
 ```
-┌───────────────────┬───────────────┬───────────────────────────────────┐
-│      Column       │     Type      │               Notes               │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ Id                │ uuid          │ PK                                │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ ProductVariantId  │ uuid          │ FK                                │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ VendorId          │ uuid          │ FK                                │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ QuantityPurchased │ int           │ original amount bought            │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ QuantityRemaining │ int           │ depletes via FIFO                 │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ UnitCost          │ numeric(12,4) │ cost paid per unit                │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ PurchasedAt       │ timestamptz   │ drives FIFO order                 │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ Notes             │ text          │ nullable                          │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ CreatedAt         │ timestamptz   │ DB-generated on insert            │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ UpdatedAt         │ timestamptz   │ DB-generated, advanced by trigger │
-├───────────────────┼───────────────┼───────────────────────────────────┤
-│ DeletedAt         │ timestamptz   │ nullable -- soft delete           │
-└───────────────────┴───────────────┴───────────────────────────────────┘
+┌──────────────┬───────────────┬───────────────────────────────────────┐
+│    Column    │     Type      │                 Notes                 │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ Id           │ uuid          │ PK                                    │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ VendorId     │ uuid          │ FK                                    │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ OrderedAt    │ timestamptz   │ drives FIFO order for its line items  │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ ShippingCost │ numeric(12,2) │ nullable -- total for the whole order │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ Notes        │ text          │ nullable                              │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ CreatedAt    │ timestamptz   │ DB-generated on insert                │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ UpdatedAt    │ timestamptz   │ DB-generated, advanced by trigger     │
+├──────────────┼───────────────┼───────────────────────────────────────┤
+│ DeletedAt    │ timestamptz   │ nullable -- soft delete               │
+└──────────────┴───────────────┴───────────────────────────────────────┘
 ```
 
 - **Id** -- Primary key.
-- **ProductVariantId** -- Which variant was restocked.
-- **VendorId** -- Who it was bought from.
-- **QuantityPurchased** -- How many units were bought in this restock. Never changes after the row is created -- it's the permanent historical record of what was ordered.
-- **QuantityRemaining** -- How many units from this specific batch are still unsold. Starts equal to `QuantityPurchased` and decreases as sales consume from it, oldest `PurchasedAt` first (FIFO).
-- **UnitCost** -- What was actually paid per unit on this restock. This is what cost-of-goods-sold is based on for any sale that draws from this batch -- if prices change on the next restock, older stock still costs out at what it actually cost.
-- **PurchasedAt** -- When the restock happened. This is what determines FIFO order: the batch with the oldest `PurchasedAt` gets sold through first.
-- **Notes** -- Free-form notes about this specific purchase (e.g. "bought on sale," "replacement for damaged shipment").
+- **VendorId** -- Who the whole order was placed with.
+- **OrderedAt** -- When the order was placed/received. Lives here, not on each line item, since
+  every line in one order shares the same date -- FIFO consumption sorts by this (via a join to
+  the order) rather than duplicating a date on every `PurchaseOrderLineItem`.
+- **ShippingCost** -- The total shipping charge for the *entire* order. Gets divided pro-rata
+  across the order's line items (by their value) when computing each line's landed `UnitCost` --
+  see `PurchaseOrderLineItem` below.
+- **Notes** -- Free-form notes about the order as a whole (e.g. an invoice/reference number).
+- **CreatedAt / UpdatedAt / DeletedAt** -- Same database-owned pattern as every other table.
+
+### PurchaseOrderLineItem
+
+One product within a `PurchaseOrder` -- the line, mirroring `SaleLineItem`. This table doubles as
+the FIFO "lot" for that batch of stock: `QuantityRemaining` starts equal to `QuantityPurchased` and
+counts down as that specific batch gets sold, so profit/cost-of-goods numbers reflect what was
+actually paid for the units sold, not just today's price.
+
+```
+┌───────────────────┬───────────────┬────────────────────────────────────────────┐
+│      Column       │     Type      │                   Notes                    │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ Id                │ uuid          │ PK                                         │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ PurchaseOrderId   │ uuid          │ FK                                         │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ ProductVariantId  │ uuid          │ FK                                         │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ QuantityPurchased │ int           │ original amount bought                     │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ QuantityRemaining │ int           │ depletes via FIFO                          │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ UnitCost          │ numeric(12,4) │ landed cost per unit, incl. shipping share │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ CreatedAt         │ timestamptz   │ DB-generated on insert                     │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ UpdatedAt         │ timestamptz   │ DB-generated, advanced by trigger          │
+├───────────────────┼───────────────┼────────────────────────────────────────────┤
+│ DeletedAt         │ timestamptz   │ nullable -- soft delete                    │
+└───────────────────┴───────────────┴────────────────────────────────────────────┘
+```
+
+- **Id** -- Primary key.
+- **PurchaseOrderId** -- Which order this line belongs to. Required -- every line item belongs to
+  exactly one order, same as `SaleLineItem.SaleId`.
+- **ProductVariantId** -- Which variant this line restocked.
+- **QuantityPurchased** -- How many units of this line were bought. Never changes after the row is
+  created -- it's the permanent historical record of what was ordered.
+- **QuantityRemaining** -- How many units from this specific batch are still unsold. Starts equal
+  to `QuantityPurchased` and decreases as sales consume from it, oldest order first (FIFO).
+- **UnitCost** -- The landed cost per unit: this line's item cost *plus* its pro-rated share of
+  the order's `ShippingCost`, divided by quantity. This is what cost-of-goods-sold is based on for
+  any sale that draws from this batch -- if prices change on the next order, older stock still
+  costs out at what it actually cost.
+- **CreatedAt / UpdatedAt / DeletedAt** -- Same database-owned pattern as every other table.
 - **CreatedAt / UpdatedAt / DeletedAt** -- Same pattern as above.
 
 ### Customer
@@ -273,7 +324,7 @@ One sale transaction -- the receipt-level record, holding the totals for the who
 ├────────────────┼───────────────┼───────────────────────────────────┤
 │ PaymentMethod  │ enum          │ nullable (Cash/Venmo/Zelle/Check) │
 ├────────────────┼───────────────┼───────────────────────────────────┤
-│ Status         │ enum          │ Completed or Voided               │
+│ Status         │ enum          │ InProgress / Completed / Voided   │
 ├────────────────┼───────────────┼───────────────────────────────────┤
 │ CreatedAt      │ timestamptz   │ DB-generated on insert            │
 ├────────────────┼───────────────┼───────────────────────────────────┤
@@ -293,7 +344,7 @@ One sale transaction -- the receipt-level record, holding the totals for the who
 - **TaxAmount** -- The actual dollar amount of tax charged, computed once and stored for the same reason as `DiscountAmount`.
 - **Total** -- The final amount charged: `Subtotal - DiscountAmount + TaxAmount`.
 - **PaymentMethod** -- How the customer paid. Nullable since it might not always be recorded.
-- **Status** -- `Completed` counts toward revenue and cost-of-goods reporting. `Voided` means the sale was a mistake that got fully undone -- the inventory it consumed is restored -- but the row is kept and still visible for audit purposes rather than hidden.
+- **Status** -- `InProgress` while line items are still being added/removed and nothing has been paid yet; no inventory is consumed in this state. `Completed` once paid -- this transition is what triggers FIFO consumption (see `SaleLineItemLotConsumption`). `Voided` means the sale was called off: trivial if it was `InProgress` (nothing to undo), or a full reversal -- restoring the inventory it consumed -- if it was `Completed`. Either way the row is kept and still visible for audit purposes rather than hidden.
 - **CreatedAt / UpdatedAt / DeletedAt** -- Same pattern as above -- note that `DeletedAt` here would mean the row itself was removed entirely, a different and more drastic action than setting `Status = Voided`.
 
 ### SaleLineItem
@@ -333,31 +384,215 @@ One row per item sold within a Sale -- the equivalent of a single line on a pape
 - **UnitPrice** -- The price actually charged per unit on this sale -- may differ from `ProductVariant.Price` if this specific line was discounted or sold at a one-off price.
 - **LineDiscountType / LineDiscountValue / LineDiscountAmount** -- Same shape as the sale-level discount fields, but scoped to just this one line (e.g. "this particular item is 20% off" rather than the whole sale).
 - **LineTotal** -- `Quantity x UnitPrice`, minus `LineDiscountAmount`.
-- **UnitCostAtSale** -- The FIFO cost of the units sold on this line, captured at the moment of sale. If the quantity was drawn from more than one `Purchase` lot (see `SaleLineItemLotConsumption`), this is the blended average across them. Stored as a snapshot so profit-margin reporting stays accurate even though `Purchase.UnitCost` values never change after the fact -- this is what actually makes a profit dashboard possible.
+- **UnitCostAtSale** -- The FIFO cost of the units sold on this line, captured at the moment of sale. If the quantity was drawn from more than one `PurchaseOrderLineItem` lot (see `SaleLineItemLotConsumption`), this is the blended average across them. Stored as a snapshot so profit-margin reporting stays accurate even though `PurchaseOrderLineItem.UnitCost` values never change after the fact -- this is what actually makes a profit dashboard possible.
 
 ### SaleLineItemLotConsumption
 
-Records exactly which Purchase (FIFO lot) a SaleLineItem's quantity was drawn from. A single line item's quantity can span more than one Purchase if the oldest lot didn't have enough units left to cover the full sale on its own -- this table is what makes that possible while keeping an exact, auditable cost trail for every unit sold.
+Records exactly which PurchaseOrderLineItem (FIFO lot) a SaleLineItem's quantity was drawn from. A single line item's quantity can span more than one PurchaseOrderLineItem if the oldest lot didn't have enough units left to cover the full sale on its own -- this table is what makes that possible while keeping an exact, auditable cost trail for every unit sold.
 
 ```
-┌──────────────────┬───────────────┬─────────────────────────────────────────┐
-│      Column      │     Type      │                  Notes                  │
-├──────────────────┼───────────────┼─────────────────────────────────────────┤
-│ Id               │ uuid          │ PK                                      │
-├──────────────────┼───────────────┼─────────────────────────────────────────┤
-│ SaleLineItemId   │ uuid          │ FK                                      │
-├──────────────────┼───────────────┼─────────────────────────────────────────┤
-│ PurchaseId       │ uuid          │ FK -- which lot this quantity came from │
-├──────────────────┼───────────────┼─────────────────────────────────────────┤
-│ QuantityConsumed │ int           │                                         │
-├──────────────────┼───────────────┼─────────────────────────────────────────┤
-│ UnitCost         │ numeric(12,4) │ that lot's cost at time of sale         │
-└──────────────────┴───────────────┴─────────────────────────────────────────┘
+┌─────────────────────────┬───────────────┬─────────────────────────────────────────┐
+│         Column          │     Type      │                  Notes                  │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ Id                      │ uuid          │ PK                                      │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ SaleLineItemId          │ uuid          │ FK                                      │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ PurchaseOrderLineItemId │ uuid          │ FK -- which lot this quantity came from │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ QuantityConsumed        │ int           │                                         │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ UnitCost                │ numeric(12,4) │ that lot's cost at time of sale         │
+└─────────────────────────┴───────────────┴─────────────────────────────────────────┘
 ```
 
 - **Id** -- Primary key.
 - **SaleLineItemId** -- Which sale line this consumption record belongs to.
-- **PurchaseId** -- Which specific restock batch (lot) the consumed units came from.
+- **PurchaseOrderLineItemId** -- Which specific restock batch (lot) the consumed units came from.
 - **QuantityConsumed** -- How many units of the line item's sale came from this particular lot. If a line's full quantity came from one lot, there's exactly one of these rows per line; if it spanned lots, there's one row per lot touched.
-- **UnitCost** -- A copy of that lot's `Purchase.UnitCost` at the moment of consumption. `Purchase.UnitCost` itself never changes, so this is mostly a convenience/audit copy -- it means this table alone has everything needed to compute COGS for a sale without joining back to `Purchase` every time.
+- **UnitCost** -- A copy of that lot's `PurchaseOrderLineItem.UnitCost` at the moment of consumption. `PurchaseOrderLineItem.UnitCost` itself never changes, so this is mostly a convenience/audit copy -- it means this table alone has everything needed to compute COGS for a sale without joining back to `PurchaseOrderLineItem` every time.
+
+## Future / Post-MVP Planning
+
+Not part of the current MVP -- planned ahead of time so `ProductVariant` doesn't need a disruptive
+schema change later. Not being built yet.
+
+### ProductVariantDetails
+
+Rich, per-product data that varies unpredictably by product/category (nutrition facts, unique
+specs, anything that doesn't have a fixed shape across the whole catalog) -- kept in its own table
+rather than a column on `ProductVariant` so the frequently-queried variant table (hit on every
+sale and stock check) stays lean. This table only gets joined in when something actually needs
+the extended data, e.g. a product detail page. A one-to-one relationship: not every variant needs
+a row here at all.
+
+```
+┌──────────────────┬─────────────┬─────────────────────────────────────────┐
+│      Column      │    Type     │                  Notes                  │
+├──────────────────┼─────────────┼─────────────────────────────────────────┤
+│ ProductVariantId │ uuid        │ PK and FK -- shared with ProductVariant │
+├──────────────────┼─────────────┼─────────────────────────────────────────┤
+│ CustomAttributes │ jsonb       │ nullable -- arbitrary per-product data  │
+├──────────────────┼─────────────┼─────────────────────────────────────────┤
+│ CreatedAt        │ timestamptz │ DB-generated on insert                  │
+├──────────────────┼─────────────┼─────────────────────────────────────────┤
+│ UpdatedAt        │ timestamptz │ DB-generated, advanced by trigger       │
+└──────────────────┴─────────────┴─────────────────────────────────────────┘
+```
+
+- **ProductVariantId** -- Both the primary key and the foreign key to `ProductVariant`, rather
+  than its own separate `Id`. This is the standard EF Core shape for a strict one-to-one
+  relationship (as opposed to the one-to-many FKs used everywhere else in this schema).
+- **CustomAttributes** -- A `jsonb` catch-all for whatever data doesn't have a fixed shape across
+  the catalog: nutrition facts for one product, dimensions for another, anything category-specific.
+  Mapped in EF Core either as a loose `Dictionary<string, object>`/`JsonDocument`, or as a typed
+  C# class using EF Core's native JSON-column support (`.ToJson()`), still persisted as `jsonb`.
+  Postgres indexes and queries into `jsonb` natively (`GIN` index, containment/path operators), so
+  this isn't "unqueryable" data, just schemaless.
+- **CreatedAt / UpdatedAt** -- Same database-owned pattern as every other table. No `DeletedAt`
+  here -- this row's lifecycle is tied directly to its `ProductVariant`; there's no independent
+  "deactivate just the extra details" concept.
+
+### ProductImages
+
+A product can have multiple images. These live in S3 (or a self-hosted S3-compatible store like
+MinIO for now, with a path to real AWS S3 later without any code changes) -- this table only
+stores a *reference* to each image, never the image bytes themselves. Deliberately a normal
+relational table rather than part of `ProductVariantDetails.CustomAttributes`: unlike that jsonb
+bag, images have a fixed, repeated shape every time (a reference plus a sort order), which is
+exactly what a one-to-many child table is for -- it gives ordering, easy add/remove of a single
+image, and a real FK for free, none of which a JSON array of strings would.
+
+```
+┌──────────────────┬─────────────┬───────────────────────────────────┐
+│      Column      │    Type     │               Notes               │
+├──────────────────┼─────────────┼───────────────────────────────────┤
+│ Id               │ uuid        │ PK                                │
+├──────────────────┼─────────────┼───────────────────────────────────┤
+│ ProductVariantId │ uuid        │ FK                                │
+├──────────────────┼─────────────┼───────────────────────────────────┤
+│ ObjectKey        │ text        │ path/key within the S3 bucket     │
+├──────────────────┼─────────────┼───────────────────────────────────┤
+│ SortOrder        │ int         │ display order; lowest = primary   │
+├──────────────────┼─────────────┼───────────────────────────────────┤
+│ CreatedAt        │ timestamptz │ DB-generated on insert            │
+├──────────────────┼─────────────┼───────────────────────────────────┤
+│ UpdatedAt        │ timestamptz │ DB-generated, advanced by trigger │
+├──────────────────┼─────────────┼───────────────────────────────────┤
+│ DeletedAt        │ timestamptz │ nullable -- soft delete           │
+└──────────────────┴─────────────┴───────────────────────────────────┘
+```
+
+- **Id** -- Primary key. A proper one-to-many relationship (unlike `ProductVariantDetails`), so
+  this needs its own `Id` rather than sharing `ProductVariant`'s.
+- **ProductVariantId** -- Which variant this image belongs to.
+- **ObjectKey** -- The image's path/key *within* the S3 bucket (e.g. `products/abc123/front.jpg`),
+  not a full URL. The bucket domain/CDN is an infrastructure detail that can change later (move
+  from local MinIO to real AWS S3, add a CDN in front, etc.); storing just the key means only the
+  app's base-URL config changes when that happens, not every row in this table.
+- **SortOrder** -- Controls display order. The image with the lowest `SortOrder` is treated as the
+  primary/thumbnail image, rather than using a separate `IsPrimary` boolean that could end up
+  marking more than one image primary by mistake.
+- **CreatedAt / UpdatedAt / DeletedAt** -- Same database-owned pattern as every other table.
+
+### AdjustmentReason / InventoryAdjustment / InventoryAdjustmentLotConsumption
+
+Handles inventory that leaves stock *without* a sale -- donations, damage, loss, and sending bad
+stock back to a vendor. Deliberately decrease-only: correcting a miscount by *adding* stock that
+was never actually purchased has no natural cost basis (nothing was bought, so there's no
+`UnitCost` to assign), so that case is handled by recording a new `PurchaseOrderLineItem` (or correcting an
+existing one) instead of going through this table.
+
+`AdjustmentReason` is a configurable lookup table, not a hardcoded enum, so new reasons (e.g. a
+new kind of write-off) can be added later without a code change. `InventoryAdjustment` is one row
+per such event. `InventoryAdjustmentLotConsumption` mirrors `SaleLineItemLotConsumption` exactly --
+same FIFO lot-consumption mechanism as a sale, just not tied to any revenue. A shared, polymorphic
+"lot consumption" table that served both Sales and Adjustments was considered and rejected: it
+would mean giving up a real, enforceable foreign key (the database can't check that a polymorphic
+reference points at a valid row once it might be either a Sale or an Adjustment), which breaks
+the real-FK consistency used everywhere else in this schema.
+
+```
+┌───────────┬─────────────┬─────────────────────────────────────────────┐
+│  Column   │    Type     │                    Notes                    │
+├───────────┼─────────────┼─────────────────────────────────────────────┤
+│ Id        │ uuid        │ PK                                          │
+├───────────┼─────────────┼─────────────────────────────────────────────┤
+│ Name      │ text        │ e.g. Donated, Damaged, Lost, Vendor Return  │
+├───────────┼─────────────┼─────────────────────────────────────────────┤
+│ CreatedAt │ timestamptz │ DB-generated on insert                      │
+├───────────┼─────────────┼─────────────────────────────────────────────┤
+│ UpdatedAt │ timestamptz │ DB-generated, advanced by trigger           │
+├───────────┼─────────────┼─────────────────────────────────────────────┤
+│ DeletedAt │ timestamptz │ nullable -- soft delete                     │
+└───────────┴─────────────┴─────────────────────────────────────────────┘
+```
+
+- **Id** -- Primary key.
+- **Name** -- The reason text itself, e.g. "Donated," "Damaged," "Lost," "Vendor Return."
+- **CreatedAt / UpdatedAt / DeletedAt** -- Same database-owned pattern as every other table;
+  `DeletedAt` lets a reason be retired from the picklist without breaking old adjustments that
+  still reference it.
+
+```
+┌──────────────────┬───────────────┬──────────────────────────────────────────┐
+│      Column      │     Type      │                  Notes                   │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ Id               │ uuid          │ PK                                       │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ ProductVariantId │ uuid          │ FK                                       │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ ReasonId         │ uuid          │ FK                                       │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ Quantity         │ int           │ units removed from stock                 │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ CreditAmount     │ numeric(12,2) │ nullable -- vendor credit/refund, if any │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ Notes            │ text          │ nullable                                 │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ AdjustedAt       │ timestamptz   │ when this happened                       │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ CreatedAt        │ timestamptz   │ DB-generated on insert                   │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ UpdatedAt        │ timestamptz   │ DB-generated, advanced by trigger        │
+├──────────────────┼───────────────┼──────────────────────────────────────────┤
+│ DeletedAt        │ timestamptz   │ nullable -- soft delete                  │
+└──────────────────┴───────────────┴──────────────────────────────────────────┘
+```
+
+- **Id** -- Primary key.
+- **ProductVariantId** -- Which variant lost stock.
+- **ReasonId** -- Why -- a reference into `AdjustmentReason`, not a hardcoded value.
+- **Quantity** -- How many units were removed. Always positive/decrease-only, per the reasoning
+  above.
+- **CreditAmount** -- Money credited or refunded back by a vendor, if any. Only meaningful for a
+  vendor-return-type reason -- null for donations, damage, or loss, where nothing comes back.
+- **Notes** -- Free-form notes about this specific adjustment.
+- **AdjustedAt** -- When the adjustment actually happened (distinct from `CreatedAt`, in case it's
+  logged after the fact).
+- **CreatedAt / UpdatedAt / DeletedAt** -- Same database-owned pattern as every other table.
+
+```
+┌─────────────────────────┬───────────────┬─────────────────────────────────────────┐
+│         Column          │     Type      │                  Notes                  │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ Id                      │ uuid          │ PK                                      │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ InventoryAdjustmentId   │ uuid          │ FK                                      │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ PurchaseOrderLineItemId │ uuid          │ FK -- which lot this quantity came from │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ QuantityConsumed        │ int           │                                         │
+├─────────────────────────┼───────────────┼─────────────────────────────────────────┤
+│ UnitCost                │ numeric(12,4) │ that lot's cost at time of adjustment   │
+└─────────────────────────┴───────────────┴─────────────────────────────────────────┘
+```
+
+- **Id** -- Primary key.
+- **InventoryAdjustmentId** -- Which adjustment this consumption record belongs to.
+- **PurchaseOrderLineItemId** -- Which specific restock batch (lot) the removed units came from.
+- **QuantityConsumed** -- How many units came from this particular lot -- an adjustment's full
+  quantity can span more than one lot, exactly like a sale can.
+- **UnitCost** -- A copy of that lot's `PurchaseOrderLineItem.UnitCost` at the moment of consumption, same
+  reasoning as `SaleLineItemLotConsumption.UnitCost`.
 
