@@ -453,7 +453,7 @@ a row here at all.
   here -- this row's lifecycle is tied directly to its `ProductVariant`; there's no independent
   "deactivate just the extra details" concept.
 
-### ProductImages
+### ProductImage
 
 A product can have multiple images. These live in S3 (or a self-hosted S3-compatible store like
 MinIO for now, with a path to real AWS S3 later without any code changes) -- this table only
