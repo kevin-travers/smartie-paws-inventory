@@ -1,5 +1,5 @@
 using Application.Abstractions.Data;
-using Domain.Users;
+using Domain.Identity;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.UnitTests.Abstractions;

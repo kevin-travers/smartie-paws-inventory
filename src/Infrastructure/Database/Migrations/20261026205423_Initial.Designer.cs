@@ -26,7 +26,7 @@ namespace Infrastructure.Database.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("Domain.Users.RefreshToken", b =>
+            modelBuilder.Entity("Domain.Identity.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -60,7 +60,7 @@ namespace Infrastructure.Database.Migrations
                     b.ToTable("refresh_tokens", "public");
                 });
 
-            modelBuilder.Entity("Domain.Users.User", b =>
+            modelBuilder.Entity("Domain.Identity.User", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -97,9 +97,9 @@ namespace Infrastructure.Database.Migrations
                     b.ToTable("users", "public");
                 });
 
-            modelBuilder.Entity("Domain.Users.RefreshToken", b =>
+            modelBuilder.Entity("Domain.Identity.RefreshToken", b =>
                 {
-                    b.HasOne("Domain.Users.User", "User")
+                    b.HasOne("Domain.Identity.User", "User")
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)

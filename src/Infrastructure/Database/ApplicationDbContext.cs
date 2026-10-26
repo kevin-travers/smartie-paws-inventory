@@ -1,5 +1,5 @@
 ﻿using Application.Abstractions.Data;
-using Domain.Users;
+using Domain.Identity;
 using Infrastructure.DomainEvents;
 using Microsoft.EntityFrameworkCore;
 using SharedKernel;
