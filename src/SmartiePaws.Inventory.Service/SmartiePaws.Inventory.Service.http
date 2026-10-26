@@ -1,6 +1,0 @@
-@SmartiePaws.Inventory.Service_HostAddress = http://localhost:5090
-
-GET {{SmartiePaws.Inventory.Service_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###
