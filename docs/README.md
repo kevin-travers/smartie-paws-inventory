@@ -111,6 +111,9 @@ building a second, parallel "AI-safe" API.
   the other services' APIs as tools, under either the end user's own identity or a dedicated
   service identity (to be decided before this is built).
 
+- **Notification / Notification Service** -- Notify users with confimations or sales. Have cron jobs to alert users
+  about upcoming marketplaces that can be optin out. Notify users about upcoming training or borading session. If payment not provided yet let user know
+
 ### How services connect
 
 - **Synchronous (REST/gRPC)** for request/response needs: the gateway calling any service, or the
