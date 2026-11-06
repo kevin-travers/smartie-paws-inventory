@@ -12,7 +12,7 @@
 
 ### Product
 
-The "parent" record for a sellable item -- the information that's shared across all of its variants (name, description, brand). Actual stock levels and pricing live on `ProductVariant`, not here, so one Product can represent something sold in multiple variations (sizes, colors, etc.) without repeating this shared information for each one.
+The "parent" record for a sellable item -- the information that's shared across all of its variants (name, description, brand, category). Pricing, SKU and barcode live on `ProductVariant`, not here, so one Product can represent something sold in multiple variations (sizes, colors, etc.) without repeating this shared information for each one. Photos are covered in [Images](ImageDesign.md) and tags in [Tags](tagsDesign.md).
 
 
 | Column | Type | Nullable | Unique | Default | Description | Notes |
@@ -24,7 +24,9 @@ The "parent" record for a sellable item -- the information that's shared across 
 | `CategoryId` | uuid | Yes | No | — | The product's category. | FK to `Categories`. One per product; drives the POS grid and sales-by-category reports. |
 | `CreatedAt` | timestamptz | No | No | `now()` | When the product was created. | Database-owned; set once on insert. |
 | `UpdatedAt` | timestamptz | No | No | `now()` | When the product was last changed. | Database-owned; advanced by a trigger on every update. |
-| `ArchivedAt` | timestamptz | Yes | No | — | When the product was archived. `NULL` means active. | Archiving hides all its variants from the POS. **Delete rule:** hard delete only when none of its variants appear in sales, purchase orders or stock history; otherwise archive it. |
+| `CreatedBy` | uuid | No | No | — | Who created the product. | Set by the app on insert, from the JWT `sub`. |
+| `UpdatedBy` | uuid | No | No | — | Who last changed the product. | Set by the app on every insert and update. |
+| `ArchivedAt` | timestamptz | Yes | No | — | When the product was archived. `NULL` means active. | Hides the product and its variants from the POS without changing the variants' own `ArchivedAt`. Blocked while any variant is on an open purchase order. **Delete rule:** hard delete only when none of its variants appear in sales, purchase orders or stock history; otherwise archive it. |
 | `ArchivedBy` | uuid | Yes | No | — | Who archived the product. | The user's id from the JWT `sub`. Set and cleared together with `ArchivedAt`: `CHECK ((ArchivedAt IS NULL) = (ArchivedBy IS NULL))`. |
 | `xmin` | xid | No | No | system | Postgres row version. | Built-in system column, not declared in DDL. Changes on every update. Returned as the `ETag` and compared against `If-Match`. In EF Core, map a `uint Version` property to it as the row version. |
 
@@ -33,30 +35,19 @@ The "parent" record for a sellable item -- the information that's shared across 
 - **Description** -- An optional longer free-text description, for anything that doesn't fit in the name.
 - **BrandId** -- The brand that makes the product, from the `Brands` table. Optional, since house-made or unbranded items have no brand. Used to filter products by brand. The brand is who makes the product; the vendor is who you buy it from.
 - **CategoryId** -- The product's single category, from the `Categories` table, e.g. Food, Treats or Toys. Groups products on the POS screen and makes sales-by-category reports add up, since each product is counted once. Use tags for anything that overlaps, like Dog or Cat.
-- **CreatedAt / UpdatedAt / ArchivedAt** -- Same database-owned pattern as every other table (see Vendor above). `ArchivedAt` is set when the product is archived, which hides it and all its variants from the POS while keeping it on old sales and purchase orders. A product is only hard-deleted when none of its variants appear in sales, purchase orders or stock history. Clearing `ArchivedAt` restores it.
+- **CreatedAt / UpdatedAt / ArchivedAt** -- Same database-owned pattern as every other table (see [Vendor](VendorDesign.md)). `ArchivedAt` is set when the product is archived, which hides it and all its variants from the POS while keeping it on old sales and purchase orders. Archiving doesn't stamp each variant's own `ArchivedAt`; instead, a variant shows on the POS only when both it and its product are active. That way, restoring the product brings back only the variants that weren't archived on their own. Archiving is blocked while any of the product's variants are on an open purchase order. A product is only hard-deleted when none of its variants appear in sales, purchase orders or stock history. Clearing `ArchivedAt` restores it.
 - **ArchivedBy** -- The user who archived the product (their id from the JWT `sub`). Set and cleared together with `ArchivedAt`.
 - **xmin** -- Not a column you create: Postgres keeps it on every row and changes it whenever the row is updated, so it works as a version number. The API returns it as the `ETag`. A client sends it back in `If-Match` when updating, and if the product changed in the meantime, the update is rejected with `412 Precondition Failed` instead of overwriting someone else's edit.
 
 ### Product REST APIs
 | Method | Endpoint | Description |
 | ----- | ----- | ----- |
-| `GET`  | `/products`  | List products (filter by search, category, brand, tags; include archived) |
-| `POST`  | `/products`  | Create a product (can include starting tags) |
-| `GET`  | `/products/{productId}`  | Get a product, including its variants and tags |
+| `GET`  | `/products`  | List products (filter by search, category, brand, tags; optionally include archived). Each product includes its main image. |
+| `POST`  | `/products`  | Create a product with at least one variant and optional starting tags, saved in one transaction |
+| `GET`  | `/products/{productId}`  | Get a product, including its variants, tags and images|
 | `PATCH`  | `/products/{productId}`  | Update name, description, brand or category |
 | `DELETE`  | `/products/{productId}`  | Hard delete; only if none of its variants have sales, purchase orders or stock history |
 | `POST`  | `/products/{productId}/archive`  | Archive a product and hide its variants from the POS |
 | `POST`  | `/products/{productId}/restore`  | Restore an archived product |
 | `PUT`  | `/products/{productId}/tags/{tagId}`  | Add a tag to the product |
 | `DELETE`  | `/products/{productId}/tags/{tagId}`  | Remove a tag from the product |
-
-### Product API Examples
-#### List Product
-#### Get Product
-#### Create Product
-#### Update Product
-#### Archive Product
-#### Restore Product
-#### Delete Product
-#### Add Product tag
-#### Remove Product tag

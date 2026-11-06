@@ -25,6 +25,8 @@ Represents a supplier you buy inventory from. Every `PurchaseOrder` records whic
 | `Address` | text | Yes | No | — | Address used when ordering from the vendor. | Multi-line. Copied onto each `PurchaseOrder` when it is created. |
 | `AccountNumber` | text | Yes | No | — | Your customer account number with this vendor. | Printed on purchase orders. Not a bank account. Not unique, since different vendors can issue the same number. |
 | `Notes` | text | Yes | No | — | Free-form notes about the vendor. | — |
+| `CreatedBy` | uuid | No | No | — | Who created the Vendor. | Set by the app on insert, from the JWT `sub`. |
+| `UpdatedBy` | uuid | No | No | — | Who last changed the Vendor. | Set by the app on every insert and update. |
 | `CreatedAt` | timestamptz | No | No | `now()` | When the vendor was created. | Database-owned; set once on insert. |
 | `UpdatedAt` | timestamptz | No | No | `now()` | When the vendor was last changed. | Database-owned; advanced by a trigger on every update. |
 | `ArchivedAt` | timestamptz | Yes | No | — | When the vendor was archived. `NULL` means active. | **Delete rule:** hard delete only when nothing references the vendor (no `PurchaseOrder` rows or inventory). If anything references it cant delete. `PurchaseOrder.VendorId` uses `ON DELETE RESTRICT`, so the database also blocks a hard delete of a referenced vendor. Archiving is blocked while the vendor has open (unreceived or unpaid) purchase orders. Archived vendors are hidden from new work but still shown on old orders; setting `archivedAt` back to `NULL` restores the vendor. |
