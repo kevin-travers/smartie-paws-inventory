@@ -45,13 +45,13 @@ Represents a supplier you buy inventory from. Every `PurchaseOrder` records whic
 | ----- | ----- | ----- |
 | `GET`  | `/vendors`  | List vendors (filterable) |
 | `POST`  | `/vendors`  | Create new vendor |
-| `GET`  | `/vendors/{vendorId}`  | Get an vendor metadata |
+| `GET`  | `/vendors/{vendorId}`  | Get vendor metadata |
 | `PATCH`  | `/vendors/{vendorId}`  | Update metadata |
 | `DELETE`  | `/vendors/{vendorId}`  | Hard Delete the vendor  |
-| `POST`  | `/vendors/{vendorId}/Restore`  | Restore archived vendor |
-| `POST`  | `/vendors/{vendorId}/Archive`  | Archive vendor |
+| `POST`  | `/vendors/{vendorId}/restore`  | Restore archived vendor |
+| `POST`  | `/vendors/{vendorId}/archive`  | Archive vendor |
 | `PUT`  | `/vendors/{vendorId}/tags/{tagId}`  | Add tag to vendor |
-| `DELETE`  | `/vendors/{vendorId}/tags/{tagId}`  | Archive vendor |
+| `DELETE`  | `/vendors/{vendorId}/tags/{tagId}`  | Remove vendor tag |
 
 NOTES:
 Archive by default, hard delete only when nothing references it. A vendor created by mistake with no purchase orders can be truly deleted. Anything with history gets archived.
